@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude chess agents</title>
+<style>
+  /* Colours are defined once here and swapped for dark mode below. */
+  :root {
+    --bg: #f5f4f0; --surface: #ffffff; --text: #1d1d1f; --muted: #6a6a70;
+    --border: #dfddd6; --accent: #2f6f4f; --accent-text: #ffffff;
+    --error: #b3261e; --soft: #efede7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15161a; --surface: #1e2025; --text: #e9e9ec; --muted: #9b9ba3;
+      --border: #30323a; --accent: #6fbf94; --accent-text: #10221a;
+      --error: #f2867f; --soft: #262930;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header.top {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  header.top h1 { font-size: 18px; margin: 0; }
+  #status {
+    font-size: 13px; padding: 2px 10px; border-radius: 999px;
+    background: var(--soft); color: var(--muted);
+  }
+  .controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  button, select, input[type=number] {
+    font: inherit; color: var(--text); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+  }
+  button { cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+  /* The form for starting a game. */
+  #setup {
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  #setup fieldset {
+    border: 1px solid var(--border); border-radius: 8px; margin: 0;
+    padding: 6px 10px 10px; display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  #setup legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+  #setup label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 2px; }
+  #setup label.inline { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); }
+  #setup input[type=number] { width: 90px; }
+  #formError { color: var(--error); font-size: 13px; flex-basis: 100%; }
+
+  /* Three columns: White's panel, the board, Black's panel. */
+  .arena {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 480px) minmax(0, 1fr);
+    gap: 16px; padding: 16px; align-items: start;
+  }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .panel.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .panel h2 { font-size: 16px; margin: 0; }
+  .panel .head { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .panel .meta { font-size: 13px; color: var(--muted); }
+  .feed { padding: 8px 12px 12px; overflow-y: auto; height: 62vh; }
+  .feed .turn {
+    font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+    margin: 12px 0 4px; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+  .feed .turn:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+  .feed .entry { margin: 6px 0; overflow-wrap: anywhere; }
+  .feed .say { white-space: pre-wrap; }
+  .feed .tool { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .feed .tool.failed, .feed .tool.failed summary { color: var(--error); }
+  .feed .played { font-weight: 600; }
+  .feed .note { font-size: 13px; color: var(--muted); }
+  .feed details { font-size: 13px; color: var(--muted); }
+  .feed summary { cursor: pointer; }
+  .feed pre {
+    margin: 4px 0 0; padding: 8px; background: var(--soft); border-radius: 6px;
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto;
+    font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--text);
+  }
+
+  .center { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  #board { width: 100%; aspect-ratio: 1; border-radius: 6px; display: block; background: var(--soft); }
+  #banner {
+    padding: 10px 12px; border-radius: 8px; background: var(--accent);
+    color: var(--accent-text); font-weight: 600; text-align: center;
+  }
+  #moves { display: block; padding: 10px 12px; max-height: 24vh; overflow-y: auto; }
+  #moves .pair { display: inline-block; white-space: nowrap; }
+  #moves .num { color: var(--muted); margin-left: 6px; }
+  #moves button { border: 0; padding: 1px 5px; background: none; }
+  #moves button.current { background: var(--accent); color: var(--accent-text); border-radius: 4px; }
+  #viewing { font-size: 13px; color: var(--muted); text-align: center; }
+  [hidden] { display: none !important; }
+
+  /* On a narrow screen, stack everything with the board first. */
+  @media (max-width: 900px) {
+    .arena { grid-template-columns: minmax(0, 1fr); }
+    .center { order: -1; width: 100%; max-width: 520px; margin: 0 auto; }
+    .feed { height: 40vh; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Claude chess agents</h1>
+  <span id="status">No game</span>
+  <div class="controls">
+    <button id="pauseBtn" disabled>Pause</button>
+    <button id="stepBtn" disabled>Step one move</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="pgnBtn" disabled>Download PGN</button>
+  </div>
+</header>
+
+<form id="setup">
+  <fieldset>
+    <legend>Chess Player1 (White)</legend>
+    <label>Model <select id="whiteModel"></select></label>
+    <label>Style <select id="whitePersona"></select></label>
+    <label>Effort <select id="whiteEffort"></select></label>
+  </fieldset>
+  <fieldset>
+    <legend>Chess Player2 (Black)</legend>
+    <label>Model <select id="blackModel"></select></label>
+    <label>Style <select id="blackPersona"></select></label>
+    <label>Effort <select id="blackEffort"></select></label>
+  </fieldset>
+  <label>Move limit (plies) <input type="number" id="maxPlies" min="2" max="600"></label>
+  <label>Start from <select id="resumeFrom"></select></label>
+  <label class="inline"><input type="checkbox" id="startPaused"> Start paused</label>
+  <button class="primary" id="startBtn">Start game</button>
+  <div id="formError" hidden></div>
+</form>
+
+<main class="arena">
+  <section class="panel" id="panel-white">
+    <div class="head">
+      <h2>&#9812; Chess Player1</h2>
+      <div class="meta" id="info-white">White</div>
+      <div class="meta" id="usage-white"></div>
+    </div>
+    <div class="feed" id="feed-white"></div>
+  </section>
+
+  <section class="center">
+    <img id="board" alt="Chess board" hidden>
+    <div id="viewing" hidden>Viewing an earlier position. <button id="liveBtn" type="button">Back to live</button></div>
+    <div id="banner" hidden></div>
+    <div class="panel" id="moves"></div>
+  </section>
+
+  <section class="panel" id="panel-black">
+    <div class="head">
+      <h2>&#9818; Chess Player2</h2>
+      <div class="meta" id="info-black">Black</div>
+      <div class="meta" id="usage-black"></div>
+    </div>
+    <div class="feed" id="feed-black"></div>
+  </section>
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// The page keeps almost no state of its own. The server sends a stream of
+// events describing the game, and each event updates part of the page.
+// ---------------------------------------------------------------------------
+
+const $ = (id) => document.getElementById(id);
+
+let gameId = null;       // the game currently shown
+let source = null;       // the EventSource connection to the server
+let moves = [];          // moves played so far, in SAN
+let viewPly = null;      // null = follow the live game; a number = an earlier position
+let paused = false;
+let gameOver = false;
+let pendingTool = {};    // the last tool call per colour, waiting for its result
+
+// ----- small helpers --------------------------------------------------------
+
+// Create an element with text. textContent is used everywhere (never
+// innerHTML), so text written by a model can never run as HTML.
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function addToFeed(color, node) {
+  const feed = $("feed-" + color);
+  feed.appendChild(node);
+  feed.scrollTop = feed.scrollHeight;   // keep the newest entry in view
+}
+
+function fillSelect(select, items, selected) {
+  select.replaceChildren();
+  for (const [value, label] of items) {
+    const option = el("option", "", label);
+    option.value = value;
+    option.selected = value === selected;
+    select.appendChild(option);
+  }
+}
+
+// ----- board and move list ----------------------------------------------------
+
+function showBoard() {
+  const ply = viewPly === null ? moves.length : viewPly;
+  $("board").src = `/api/games/${gameId}/board.svg?ply=${ply}`;
+  $("board").hidden = false;
+  $("viewing").hidden = viewPly === null;
+}
+
+function renderMoves() {
+  const box = $("moves");
+  box.replaceChildren();
+  const shown = viewPly === null ? moves.length : viewPly;
+  let pair = null;   // a move number with White's and Black's move, kept on one line
+  moves.forEach((san, index) => {
+    const ply = index + 1;
+    if (index % 2 === 0) {
+      pair = el("span", "pair");
+      pair.appendChild(el("span", "num", `${index / 2 + 1}.`));
+      box.appendChild(pair);
+    }
+    const button = el("button", ply === shown ? "current" : "", san);
+    button.type = "button";
+    // Clicking a move shows the board as it was after that move.
+    button.onclick = () => { viewPly = ply === moves.length ? null : ply; showBoard(); renderMoves(); };
+    pair.appendChild(button);
+  });
+  if (!moves.length) box.appendChild(el("span", "meta", "No moves yet."));
+  box.scrollTop = box.scrollHeight;
+}
+
+// ----- buttons and status ----------------------------------------------------
+
+function updateControls() {
+  const running = gameId !== null && !gameOver;
+  $("pauseBtn").disabled = !running;
+  $("pauseBtn").textContent = paused ? "Resume" : "Pause";
+  $("stepBtn").disabled = !running || !paused;
+  $("stopBtn").disabled = !running;
+  $("pgnBtn").disabled = !gameOver;
+  if (gameId === null) $("status").textContent = "No game";
+  else if (gameOver) $("status").textContent = "Game over";
+  else $("status").textContent = paused ? "Paused" : "Playing";
+}
+
+function setActive(color) {
+  $("panel-white").classList.toggle("active", color === "white");
+  $("panel-black").classList.toggle("active", color === "black");
+}
+
+// ----- one handler per event type --------------------------------------------
+
+const handlers = {
+  game_started(event) {
+    for (const color of ["white", "black"]) {
+      const player = event.players[color];
+      const details = player.model === "random" ? "random mover" : `${player.model} · ${player.persona} · ${player.effort} effort`;
+      $("info-" + color).textContent = `${color === "white" ? "White" : "Black"} · ${details}`;
+    }
+    moves = event.moves.slice();   // not empty when a saved game is resumed
+    renderMoves();
+    showBoard();
+  },
+
+  status(event) {
+    paused = event.state === "paused";
+  },
+
+  turn_started(event) {
+    setActive(event.color);
+    addToFeed(event.color, el("div", "turn", `Move ${event.move_number}`));
+  },
+
+  agent_thinking(event) {
+    // The model's reasoning summary, folded away so it does not crowd the feed.
+    const details = el("details", "entry");
+    details.appendChild(el("summary", "", "Thinking"));
+    details.appendChild(el("pre", "", event.text));
+    addToFeed(event.color, details);
+  },
+
+  agent_text(event) {
+    addToFeed(event.color, el("div", "entry say", event.text));
+  },
+
+  tool_call(event) {
+    const args = event.name === "make_move" ? JSON.stringify(event.args.move ?? "") : "";
+    const entry = el("div", "entry tool", `${event.name}(${args})`);
+    pendingTool[event.color] = entry;
+    addToFeed(event.color, entry);
+  },
+
+  tool_result(event) {
+    // Attach the result to the tool call it answers.
+    const entry = pendingTool[event.color];
+    if (!entry) return;
+    const details = el("details");
+    details.appendChild(el("summary", "", event.is_error ? "error" : "result"));
+    details.appendChild(el("pre", "", event.content));
+    if (event.is_error) { entry.classList.add("failed"); details.open = true; }
+    entry.appendChild(details);
+    $("feed-" + event.color).scrollTop = $("feed-" + event.color).scrollHeight;
+  },
+
+  move_made(event) {
+    moves.push(event.san);
+    renderMoves();
+    if (viewPly === null) showBoard();
+    addToFeed(event.color, el("div", "entry played", `Played ${event.san}`));
+    if (event.plan) addToFeed(event.color, el("div", "entry note", `Note to self: ${event.plan}`));
+  },
+
+  turn_ended(event) {
+    const usage = event.usage;
+    if (usage.input_tokens || usage.output_tokens) {
+      $("usage-" + event.color).textContent =
+        `${usage.input_tokens.toLocaleString()} tokens in · ${usage.output_tokens.toLocaleString()} out · about $${usage.cost_usd.toFixed(4)}`;
+    }
+  },
+
+  game_over(event) {
+    gameOver = true;
+    setActive(null);
+    const headline = event.winner ? `${event.winner === "white" ? "White" : "Black"} wins` : (event.result === "*" ? "No result" : "Draw");
+    $("banner").textContent = `${headline}: ${event.reason}`;
+    $("banner").hidden = false;
+    source.close();      // the stream is finished; stop the browser reconnecting
+    loadOptions(false);  // refresh the list of saved games
+  },
+};
+
+// ----- connecting to a game ---------------------------------------------------
+
+function watchGame(id) {
+  if (source) source.close();
+  gameId = id;
+  moves = []; viewPly = null; paused = false; gameOver = false; pendingTool = {};
+  for (const color of ["white", "black"]) {
+    $("feed-" + color).replaceChildren();
+    $("usage-" + color).textContent = "";
+  }
+  $("banner").hidden = true;
+  setActive(null);
+  renderMoves();
+
+  // The server replays every event from the start of the game, so the same
+  // code handles a brand new game and a page refresh in the middle of one.
+  source = new EventSource(`/api/games/${id}/events`);
+  source.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (handlers[event.type]) handlers[event.type](event);
+    updateControls();
+  };
+  updateControls();
+}
+
+async function loadOptions(firstLoad) {
+  const options = await (await fetch("/api/options")).json();
+
+  const saved = options.saved_games.map((game) =>
+    [game.id, `${game.id} · ${game.plies} plies · ${game.status}`]);
+  fillSelect($("resumeFrom"), [["", "A new game"], ...saved], $("resumeFrom").value);
+  if (!firstLoad) return;
+
+  const models = Object.entries(options.models);
+  const personas = options.personas.map((name) => [name, name]);
+  const efforts = options.efforts.map((name) => [name, name]);
+  for (const side of ["white", "black"]) {
+    fillSelect($(side + "Model"), models, options.defaults.model);
+    fillSelect($(side + "Persona"), personas, options.defaults.persona);
+    fillSelect($(side + "Effort"), efforts, options.defaults.effort);
+  }
+  $("maxPlies").value = options.defaults.max_plies;
+  if (options.current_game) watchGame(options.current_game);
+}
+
+// ----- wiring up the form and buttons ------------------------------------------
+
+$("setup").onsubmit = async (submitEvent) => {
+  submitEvent.preventDefault();
+  $("formError").hidden = true;
+  const player = (side) => ({
+    model: $(side + "Model").value,
+    persona: $(side + "Persona").value,
+    effort: $(side + "Effort").value,
+  });
+  const response = await fetch("/api/games", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      white: player("white"),
+      black: player("black"),
+      max_plies: Number($("maxPlies").value),
+      start_paused: $("startPaused").checked,
+      resume_from: $("resumeFrom").value || null,
+    }),
+  });
+  if (!response.ok) {
+    $("formError").textContent = "Could not start the game. Check the settings and try again.";
+    $("formError").hidden = false;
+    return;
+  }
+  watchGame((await response.json()).id);
+};
+
+const sendControl = (action) => fetch(`/api/games/${gameId}/${action}`, { method: "POST" });
+$("pauseBtn").onclick = () => sendControl(paused ? "resume" : "pause");
+$("stepBtn").onclick = () => sendControl("step");
+$("stopBtn").onclick = () => sendControl("stop");
+$("pgnBtn").onclick = () => { window.location = `/api/games/${gameId}/pgn`; };
+$("liveBtn").onclick = () => { viewPly = null; showBoard(); renderMoves(); };
+
+loadOptions(true);
+</script>
+</body>
+</html>
