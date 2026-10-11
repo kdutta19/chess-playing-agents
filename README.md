@@ -1,4 +1,4 @@
-# Claude chess agents
+# Two chess players (Claude agents)
 
 Two AI agents, **Chess Player1** (White) and **Chess Player2** (Black), play a
 full game of chess against each other while you watch in a web page. Each agent
